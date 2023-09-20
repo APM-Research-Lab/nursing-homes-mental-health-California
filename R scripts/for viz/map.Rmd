@@ -1,0 +1,103 @@
+---
+title: "map"
+author: "Elisabeth Gawthrop"
+date: "2023-04-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## load data and libraries
+```{r load data and libraries}
+library(tidyverse)
+library(sf)
+library(here)
+library(leaflet)
+library(leaflegend)
+library(htmlwidgets) 
+library(htmltools)
+library(sp)
+library(leaflet.extras)
+library(leafem)
+library(leafpop)
+library(scales)
+
+`%!in%` <- Negate(`%in%`)
+
+## used geocodio.com to get lat / lon of facilities by address from csv created in lookuptool.R script
+# was also edited by hand and noted in 'accuracy score' column if changed 
+df <- read_csv('filename.csv')
+
+# make adjustments for map purposes 
+fac <- df %>% 
+  # add leading zero to CCN when needed 
+  mutate(CCN = sprintf("%06s", CCN)) %>%
+  # need numeric format for the >75% rows, so pull the number out (will just be 75 for those greater than 75)
+  mutate(percent_as_number = parse_number(`% of residents with an SMI`)) %>%
+  # arrange so that higher SMI circles are the top layer in map (for showing more obviously where they are more geographically distributed)
+  arrange(`percent_as_number`) %>%
+  # get rid of backslash that was needed in the lookup tool 
+  mutate(percent_SMI = gsub('\\\\', '', `% of residents with an SMI`)) %>%
+  mutate(percent_SMI_no_dementia = gsub('\\\\', '', `% of residents with an SMI and no dementia diagnosis`)) %>%
+  #select relevant variables
+  select(percent_SMI, percent_SMI_no_dementia, CCN, percent_as_number, `Provider Name`, `Provider City`, Latitude, Longitude)
+
+# convert to the lat lon / projection to work with R libraries 
+coordinates(fac)=~Longitude+Latitude
+proj4string(fac) <- CRS("+proj=longlat +datum=WGS84")
+```
+
+```{r}
+# create the pop up content 
+popup_all <- paste0("<style> div.leaflet-popup-content {width:150px}</style>", '<h3>',
+                   fac$`Provider Name`,'</h3>', 
+                  fac$`Provider City`, ', CA
+                   <h4>',
+                   fac$percent_SMI, " of residents have a serious mental illness (SMI)</h4>",
+                  fac$percent_SMI_no_dementia, " of residents have an SMI and no dementia diagnosis")
+
+# create the color palette based on the percent SMI, with the six breaks as indicated 
+pal <- colorBin(
+  c("#F9D423", "#FC9F37", "#F75C2E", "#F7295F", "#9718F9", "#400CC5"),
+  # colors depend on the count variable
+  domain = fac$percent_as_number, bins = c(0,10,20,40,60,74,75)
+  )
+
+# map it ! start with the min and max zoom that will be allowed, as well as allowing users to pan around the map 
+a <- leaflet(options = leafletOptions(minZoom = 5, maxZoom = 15, dragging = TRUE)) %>%
+  #load tiles and add attributions 
+  addTiles(
+    urlTemplate = "https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png",
+    attribution = paste0("&copy <a href='https://stadiamaps.com/' target = '_blank'>Stadia Maps</a>; &copy <a href='https://openmaptiles.org/' target = '_blank'>OpenMapTiles</a>; &copy <a href='http://openstreetmap.org' target = '_blank'>OpenStreetMap</a> contributors | Source: Centers for Medicare & Medicaid Services | Analysis  and mapping by Elisabeth Gawthrop, <a href='https://www.apmresearchlab.org/'  target = '_blank'> APM Research Lab</a>"),
+    options = tileOptions()
+  ) %>%
+  # set default view when map loads 
+  setView(-118.5, 36, zoom = 5) %>% 
+  # made a circle point for each facility, with color palette 
+  # dependent on the % SMI 
+  addCircleMarkers(data = fac, 
+             color=~pal(percent_as_number),
+             opacity = 0.95,
+             fillOpacity = 0.7,
+             stroke = TRUE, 
+             weight = 1, 
+             group = 'fac',
+             radius = 6,
+             popup = popup_all) %>%
+  # make a legend
+  addLegend(data = fac,
+            values = fac$percent_as_number,
+            colors = c("#F9D423", "#FC9F37", "#F75C2E", "#F7295F", "#9718F9", "#400CC5"),
+            labels = c("0-10%", "10-20%", "20-40%", "40-60%", "60-75%", "75%+"),
+            position = "topright",
+            opacity = .85,
+            title = 'Percent of <br>nursing home <br>residents with <br>a serious mental <br>illness') 
+
+# save
+saveWidget(a, file="index.html")
+
+
+```
+
